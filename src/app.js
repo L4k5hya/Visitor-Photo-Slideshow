@@ -27,7 +27,9 @@ function createApp(db, config = {}, events = new EventHub()) {
 
   app.get('/health', (req, res) => res.json({ status: 'ok' }));
   app.get('/api/config', (req, res) =>
-    res.json({ slideDurationSeconds: cfg.slideDurationSeconds })
+    res.json({ slideDurationSeconds: cfg.slideDurationSeconds,
+      maxFileSizeMb: cfg.maxFileSizeMb,
+      maxFiles: cfg.maxFiles,})
   );
   app.get('/api/events', events.handler());
   app.use('/api', createUploadRouter(db, cfg, events));

@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Share your photo</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, sans-serif; background: #f4f5f7; color: #1a1a1a; }
+    main { max-width: 480px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 .25rem; }
+    p.sub { margin: 0 0 1.25rem; color: #555; }
+    form { background: #fff; padding: 1.25rem; border-radius: 12px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+    label.field { display: block; font-weight: 600; margin-bottom: .35rem; }
+    input[type=text] { width: 100%; padding: .7rem; font-size: 1rem; border: 1px solid #bbb; border-radius: 8px; }
+    input[type=file] { width: 100%; margin: .25rem 0 .75rem; }
+    .row { margin-bottom: 1rem; }
+    .consent { display: flex; gap: .6rem; align-items: flex-start; font-size: .95rem; line-height: 1.35; }
+    .consent input { margin-top: .2rem; width: 1.2rem; height: 1.2rem; flex: none; }
+    button { font-size: 1rem; padding: .75rem 1.25rem; border: 0; border-radius: 8px; cursor: pointer; }
+    button.primary { background: #2563eb; color: #fff; width: 100%; font-weight: 600; }
+    button.primary:disabled { background: #93b4f5; cursor: not-allowed; }
+    button.link { background: none; color: #2563eb; padding: 0; text-decoration: underline; font-size: .9rem; }
+    #welcome { display: none; background: #eef4ff; padding: .75rem; border-radius: 8px; margin-bottom: 1rem; }
+    #previews { display: flex; flex-wrap: wrap; gap: .5rem; margin-bottom: 1rem; }
+    #previews img { width: 72px; height: 72px; object-fit: cover; border-radius: 6px; }
+    progress { width: 100%; height: 10px; display: none; margin-bottom: 1rem; }
+    #message { margin-top: 1rem; padding: .75rem; border-radius: 8px; display: none; }
+    #message.ok { background: #e6f6ea; color: #14532d; }
+    #message.err { background: #fde8e8; color: #7f1d1d; }
+    small { color: #666; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Share your photo</h1>
+  <p class="sub">Your photo will appear on the big screen right after you upload it.</p>
+
+  <form id="form" novalidate>
+    <div id="welcome">
+      Welcome back, <strong id="welcomeName"></strong>!
+      <button type="button" class="link" id="notYou">Not you?</button>
+    </div>
+
+    <div class="row" id="nameRow">
+      <label class="field" for="name">Your name</label>
+      <input type="text" id="name" maxlength="50" autocomplete="given-name">
+    </div>
+
+    <div class="row">
+      <label class="field" for="photos">Photos</label>
+      <input type="file" id="photos" multiple accept="image/jpeg,image/png,image/webp">
+      <small id="limits"></small>
+    </div>
+
+    <div id="previews"></div>
+
+    <div class="row">
+      <label class="consent">
+        <input type="checkbox" id="consent">
+        <span>I agree that my name and photos will be <strong>shown publicly</strong> on the
+        display screen. I confirm that anyone who appears in the photos is okay with this.</span>
+      </label>
+    </div>
+
+    <progress id="progress" max="100" value="0"></progress>
+    <button type="submit" class="primary" id="submit">Upload</button>
+    <div id="message" role="status"></div>
+  </form>
+
+  <p><small>Watch the screen at <a href="/display.html">/display.html</a>.</small></p>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const TOKEN_KEY = 'visitorToken';
+  const NAME_KEY = 'visitorName';
+  const ALLOWED = ['image/jpeg', 'image/png', 'image/webp'];
+
+  let limits = { maxFileSizeMb: 5, maxFiles: 5 };
+
+  // localStorage can throw (private mode), so wrap it
+  const store = {
+    get: (k) => { try { return localStorage.getItem(k); } catch { return null; } },
+    set: (k, v) => { try { localStorage.setItem(k, v); } catch {} },
+    del: (k) => { try { localStorage.removeItem(k); } catch {} },
+  };
+
+  function showMessage(text, ok) {
+    const m = $('message');
+    m.textContent = text;                 // textContent => no XSS
+    m.className = ok ? 'ok' : 'err';
+    m.style.display = 'block';
+  }
+
+  function renderIdentity() {
+    const token = store.get(TOKEN_KEY);
+    const name = store.get(NAME_KEY);
+    const returning = Boolean(token && name);
+    $('welcome').style.display = returning ? 'block' : 'none';
+    $('nameRow').style.display = returning ? 'none' : 'block';
+    if (returning) $('welcomeName').textContent = name;
+  }
+
+  $('notYou').addEventListener('click', () => {
+    store.del(TOKEN_KEY);
+    store.del(NAME_KEY);
+    renderIdentity();
+    $('name').focus();
+  });
+
+  fetch('/api/config').then((r) => r.json()).then((c) => {
+    limits = c;
+    $('limits').textContent =
+      `Up to ${c.maxFiles} photos, ${c.maxFileSizeMb} MB each. JPEG, PNG or WebP.`;
+  }).catch(() => {});
+
+  // Previews + instant client-side checks (the server re-checks everything)
+  $('photos').addEventListener('change', () => {
+    const box = $('previews');
+    box.replaceChildren();
+    const files = [...$('photos').files];
+    const problem = checkFiles(files);
+    if (problem) { showMessage(problem, false); return; }
+    $('message').style.display = 'none';
+    files.forEach((f) => {
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(f);
+      img.onload = () => URL.revokeObjectURL(img.src);
+      img.alt = 'Preview';
+      box.appendChild(img);
+    });
+  });
+
+  function checkFiles(files) {
+    if (files.length === 0) return 'Please choose at least one photo.';
+    if (files.length > limits.maxFiles) return `Please choose at most ${limits.maxFiles} photos.`;
+    for (const f of files) {
+      if (!ALLOWED.includes(f.type)) return `"${f.name}" is not a JPEG, PNG or WebP image.`;
+      if (f.size > limits.maxFileSizeMb * 1024 * 1024)
+        return `"${f.name}" is larger than ${limits.maxFileSizeMb} MB.`;
+    }
+    return null;
+  }
+
+  $('form').addEventListener('submit', (e) => {
+    e.preventDefault();
+    const token = store.get(TOKEN_KEY);
+    const name = ($('name').value || store.get(NAME_KEY) || '').trim();
+    const files = [...$('photos').files];
+
+    if (!name) return showMessage('Please enter your name.', false);
+    const problem = checkFiles(files);
+    if (problem) return showMessage(problem, false);
+    if (!$('consent').checked)
+      return showMessage('Please tick the consent box to continue.', false);
+
+    const fd = new FormData();
+    fd.append('name', name);
+    fd.append('consent', 'true');
+    files.forEach((f) => fd.append('photos', f));
+
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/upload');
+    if (token) xhr.setRequestHeader('x-visitor-token', token);
+
+    xhr.upload.onprogress = (ev) => {
+      if (ev.lengthComputable) $('progress').value = (ev.loaded / ev.total) * 100;
+    };
+    xhr.onloadstart = () => {
+      $('submit').disabled = true;          // prevent double submits
+      $('progress').style.display = 'block';
+      $('progress').value = 0;
+      $('message').style.display = 'none';
+    };
+    xhr.onloadend = () => {
+      $('submit').disabled = false;
+      $('progress').style.display = 'none';
+    };
+    xhr.onerror = () => showMessage('Network problem. Please try again.', false);
+
+    xhr.onload = () => {
+      let body = {};
+      try { body = JSON.parse(xhr.responseText); } catch {}
+      if (xhr.status === 201) {
+        if (body.token) {                    // issued only for a new visitor
+          store.set(TOKEN_KEY, body.token);
+          store.set(NAME_KEY, name);
+        }
+        showMessage('Uploaded! Look at the screen.', true);
+        $('form').reset();
+        $('previews').replaceChildren();
+        renderIdentity();
+      } else {
+        showMessage(body.error || 'Upload failed. Please try again.', false);
+      }
+    };
+
+    xhr.send(fd);
+  });
+
+  renderIdentity();
+</script>
+</body>
+</html>

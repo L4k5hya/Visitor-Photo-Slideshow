@@ -112,3 +112,10 @@ test('10 simultaneous uploads all succeed with unique files', async () => {
   expect(fs.readdirSync(dir)).toHaveLength(10);
   expect(db.prepare('SELECT COUNT(*) c FROM photos').get().c).toBe(10);
 });
+
+test('unknown token plus a name creates a new visitor instead of failing', async () => {
+  const res = await send({ token: 'a'.repeat(64), files: [{ buf: jpeg(), name: 'a.jpg' }] });
+  expect(res.status).toBe(201);
+  expect(res.body.returning).toBe(false);
+  expect(res.body.token).toHaveLength(64);
+});
