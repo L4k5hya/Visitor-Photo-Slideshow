@@ -5,6 +5,7 @@ const path = require('path');
 const crypto = require('crypto');
 const repo = require('./repository');
 const { detectImageType } = require('./validate');
+const { sanitizeImage } = require('./sanitize');
 
 const MAX_NAME_LENGTH = 50;
 
@@ -33,11 +34,13 @@ function createUploadRouter(db, cfg, events) {
         return res.status(400).json({ error: 'Invalid upload.' });
       }
       if (err) return res.status(500).json({ error: 'Upload failed.' });
-      handleUpload(req, res);
+      handleUpload(req, res).catch(() => {
+        if (!res.headersSent) res.status(500).json({ error: 'Upload failed.' });
+      });
     });
   });
 
-  function handleUpload(req, res) {
+  async function handleUpload(req, res) {
     // 1. Consent is mandatory (checked on the server, not just in the UI)
     if (req.body.consent !== 'true') {
       return res.status(400).json({ error: 'You must consent to your photo being displayed publicly.' });
@@ -49,7 +52,7 @@ function createUploadRouter(db, cfg, events) {
       return res.status(400).json({ error: 'Please choose at least one photo.' });
     }
 
-    // 3. Validate every file by magic bytes; reject the whole request if any fail
+    // 3. Cheap check first: magic bytes
     const checked = [];
     for (const f of files) {
       const type = detectImageType(f.buffer);
@@ -60,11 +63,23 @@ function createUploadRouter(db, cfg, events) {
     }
 
     // 4. Identify returning visitor by token; otherwise a name is required
-    let visitor = repo.findVisitorByToken(db, req.get('x-visitor-token'));
+    const visitor = repo.findVisitorByToken(db, req.get('x-visitor-token'));
     const name = (req.body.name || '').trim();
     if (!visitor && (name.length === 0 || name.length > MAX_NAME_LENGTH)) {
       return res.status(400).json({ error: `Please enter your name (1-${MAX_NAME_LENGTH} characters).` });
     }
+
+    // 5. Expensive check: decode and re-encode (strips EXIF, rejects broken files)
+    const clean = [];
+    try {
+      for (const { file, type } of checked) {
+        clean.push({ file, type, buffer: await sanitizeImage(file.buffer, type) });
+      }
+    } catch {
+      return res.status(400).json({ error: 'One of the files is not a valid, readable image.' });
+    }
+
+    // 6. Everything from here is synchronous: read previous photos BEFORE inserting new ones
     const previous = visitor
       ? repo.getPhotosForVisitor(db, visitor.id).map((p) => ({
           id: p.id,
@@ -72,7 +87,7 @@ function createUploadRouter(db, cfg, events) {
         }))
       : [];
 
-    // 5. Write files and DB rows together; clean up files if anything fails
+    // 7. Write files and DB rows together; clean up files if anything fails
     const written = [];
     let visitorId = visitor ? visitor.id : null;
     let newToken = null;
@@ -86,16 +101,16 @@ function createUploadRouter(db, cfg, events) {
           visitorId = created.visitorId;
           newToken = created.token;
         }
-        for (const { file, type } of checked) {
+        for (const { file, type, buffer } of clean) {
           const filename = `${crypto.randomUUID()}.${type.ext}`;
-          fs.writeFileSync(path.join(cfg.uploadDir, filename), file.buffer, { flag: 'wx' });
+          fs.writeFileSync(path.join(cfg.uploadDir, filename), buffer, { flag: 'wx' });
           written.push(filename);
           const id = repo.addPhoto(db, {
             visitorId,
             filename,
             originalName: path.basename(file.originalname || '').slice(0, 100),
             mimeType: type.mime,
-            sizeBytes: file.size,
+            sizeBytes: buffer.length,
             consentAt,
           });
           photos.push({ id, filename });
@@ -105,6 +120,8 @@ function createUploadRouter(db, cfg, events) {
       written.forEach((fn) => fs.rmSync(path.join(cfg.uploadDir, fn), { force: true }));
       return res.status(500).json({ error: 'Could not save your photos.' });
     }
+
+    // Only after the transaction has committed do we tell the display
     events.broadcast('slideshow', {
       name: visitor ? visitor.name : name,
       returning: Boolean(visitor),
