@@ -29,6 +29,10 @@
     #message.ok { background: #e6f6ea; color: #14532d; }
     #message.err { background: #fde8e8; color: #7f1d1d; }
     small { color: #666; }
+    #mine { display: none; margin-top: 1.5rem; }
+    #mine-grid { display: flex; flex-wrap: wrap; gap: .75rem; margin-bottom: .75rem; }
+    .thumb img { width: 96px; height: 96px; object-fit: cover; border-radius: 6px; display: block; }
+    .thumb button { margin-top: .25rem; font-size: .8rem; padding: .3rem .5rem; background: #fde8e8; color: #7f1d1d; }
   </style>
 </head>
 <body>
@@ -67,6 +71,12 @@
     <button type="submit" class="primary" id="submit">Upload</button>
     <div id="message" role="status"></div>
   </form>
+
+  <section id="mine">
+    <h2>Your photos</h2>
+    <div id="mine-grid"></div>
+    <button type="button" class="link" id="eraseAll">Delete all my photos and forget me</button>
+  </section>
 
   <p><small>Watch the screen at <a href="/display.html">/display.html</a>.</small></p>
 </main>
@@ -199,6 +209,54 @@
     xhr.send(fd);
   });
 
+  async function loadMine() {
+    const token = store.get(TOKEN_KEY);
+    $('mine').style.display = 'none';
+    if (!token) return;
+    try {
+      const r = await fetch('/api/my-photos', { headers: { 'x-visitor-token': token } });
+      if (r.status === 401) {              // stale token: forget it
+        store.del(TOKEN_KEY); store.del(NAME_KEY); renderIdentity(); return;
+      }
+      const { photos } = await r.json();
+      const grid = $('mine-grid');
+      grid.replaceChildren();
+      photos.forEach((p) => {
+        const box = document.createElement('div');
+        box.className = 'thumb';
+        const img = document.createElement('img');
+        img.src = p.url; img.alt = 'Your photo';
+        const btn = document.createElement('button');
+        btn.type = 'button'; btn.textContent = 'Delete';
+        btn.addEventListener('click', async () => {
+          btn.disabled = true;
+          const d = await fetch(`/api/photos/${p.id}`, {
+            method: 'DELETE', headers: { 'x-visitor-token': token },
+          });
+          if (d.ok) loadMine();
+          else { btn.disabled = false; showMessage('Could not delete that photo.', false); }
+        });
+        box.append(img, btn);
+        grid.appendChild(box);
+      });
+      $('mine').style.display = photos.length ? 'block' : 'none';
+    } catch {}
+  }
+
+  $('eraseAll').addEventListener('click', async () => {
+    if (!confirm('Delete all your photos and your visitor record? This cannot be undone.')) return;
+    const token = store.get(TOKEN_KEY);
+    const r = await fetch('/api/me', { method: 'DELETE', headers: { 'x-visitor-token': token } });
+    if (r.ok) {
+      store.del(TOKEN_KEY); store.del(NAME_KEY);
+      renderIdentity(); loadMine();
+      showMessage('All your data has been deleted.', true);
+    } else {
+      showMessage('Could not delete. Please try again.', false);
+    }
+  });
+
+  loadMine();
   renderIdentity();
 </script>
 </body>

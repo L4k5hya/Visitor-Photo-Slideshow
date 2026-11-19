@@ -1,5 +1,6 @@
 const express = require('express');
 const { createUploadRouter } = require('./upload');
+const { createPrivacyRouter } = require('./privacy');
 const { EventHub } = require('./events');
 
 function createApp(db, config = {}, events = new EventHub()) {
@@ -8,6 +9,7 @@ function createApp(db, config = {}, events = new EventHub()) {
     maxFileSizeMb: Number(process.env.MAX_FILE_SIZE_MB) || 5,
     maxFiles: 5,
     slideDurationSeconds: Number(process.env.SLIDE_DURATION_SECONDS) || 10,
+    adminPassword: process.env.ADMIN_PASSWORD,
     ...config,
   };
 
@@ -15,7 +17,6 @@ function createApp(db, config = {}, events = new EventHub()) {
   app.use(express.json());
   app.use(express.static('public'));
 
-  // Uploaded photos: images only, never directory listings, no content sniffing
   app.use(
     '/photos',
     express.static(cfg.uploadDir, {
@@ -27,12 +28,15 @@ function createApp(db, config = {}, events = new EventHub()) {
 
   app.get('/health', (req, res) => res.json({ status: 'ok' }));
   app.get('/api/config', (req, res) =>
-    res.json({ slideDurationSeconds: cfg.slideDurationSeconds,
+    res.json({
+      slideDurationSeconds: cfg.slideDurationSeconds,
       maxFileSizeMb: cfg.maxFileSizeMb,
-      maxFiles: cfg.maxFiles,})
+      maxFiles: cfg.maxFiles,
+    })
   );
   app.get('/api/events', events.handler());
   app.use('/api', createUploadRouter(db, cfg, events));
+  app.use('/api', createPrivacyRouter(db, cfg, events));
 
   return app;
 }
