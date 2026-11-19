@@ -2,6 +2,7 @@ const express = require('express');
 const { createUploadRouter } = require('./upload');
 const { createPrivacyRouter } = require('./privacy');
 const { EventHub } = require('./events');
+const helmet = require('helmet');
 
 function createApp(db, config = {}, events = new EventHub()) {
   const cfg = {
@@ -14,6 +15,20 @@ function createApp(db, config = {}, events = new EventHub()) {
   };
 
   const app = express();
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        useDefaults: true,
+        directives: {
+          'script-src': ["'self'"],
+          'style-src': ["'self'", "'unsafe-inline'"],
+          'img-src': ["'self'", 'blob:', 'data:'], // blob: for upload previews
+          'connect-src': ["'self'"],               // fetch + EventSource
+          'upgrade-insecure-requests': null,       // would break plain-http LAN use
+        },
+      },
+    })
+  );
   app.use(express.json());
   app.use(express.static('public'));
 
