@@ -58,7 +58,24 @@ const photoEl = document.getElementById('photo');
     if (current && gone.has(current.id)) next();
   }
 
-  const es = new EventSource('/api/events');
+  document.getElementById('joinUrl').textContent = 'Add your photo at ' + location.origin;
+
+  // EventSource retries dropped connections by itself, but NOT after an HTTP error
+  // (e.g. 503 from the connection cap, or a proxy restarting). Reconnect manually then.
+  function connect() {
+    const es = new EventSource('/api/events');
+    es.onopen = () => { statusEl.textContent = 'live'; };
+    es.onerror = () => {
+      statusEl.textContent = 'reconnecting…';
+      if (es.readyState === EventSource.CLOSED) {
+        es.close();
+        setTimeout(connect, 5000);
+      }
+    };
+    es.addEventListener('slideshow', (e) => enqueue(JSON.parse(e.data)));
+    es.addEventListener('remove', (e) => removeSlides(JSON.parse(e.data).ids));
+  }
+  connect();
   es.onopen = () => { statusEl.textContent = 'live'; };
   es.onerror = () => { statusEl.textContent = 'reconnecting…'; };
   es.addEventListener('slideshow', (e) => enqueue(JSON.parse(e.data)));
