@@ -1,5 +1,6 @@
 class EventHub {
-  constructor() {
+  constructor(maxClients = 100) {
+    this.maxClients = maxClients;
     this.clients = new Set();
     // Heartbeat keeps proxies/TVs from closing an idle connection
     this.timer = setInterval(() => {
@@ -10,6 +11,7 @@ class EventHub {
 
   handler() {
     return (req, res) => {
+      if (this.clients.size >= this.maxClients) return res.status(503).end();
       res.set({
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',

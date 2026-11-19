@@ -36,3 +36,47 @@ test('pages contain no inline script, which the CSP would block', async () => {
     expect(html).not.toMatch(/<script(?![^>]*\bsrc=)[^>]*>/i);
   }
 });
+
+const upload = (app) =>
+  request(app).post('/api/upload').field('name', 'Priya').field('consent', 'true')
+    .attach('photos', jpegBuf, 'a.jpg');
+
+test('uploads beyond the rate limit get 429 with a JSON error', async () => {
+  const app = make({ uploadRateLimit: 2 });
+  expect((await upload(app)).status).toBe(201);
+  expect((await upload(app)).status).toBe(201);
+  const third = await upload(app);
+  expect(third.status).toBe(429);
+  expect(third.body.error).toMatch(/too many/i);
+});
+
+test('repeated wrong admin passwords are blocked, even if the next one is right', async () => {
+  const app = make({ adminFailLimit: 3 });
+  for (let i = 0; i < 3; i++) {
+    const r = await request(app).get('/api/admin/photos').set('x-admin-password', 'wrong');
+    expect(r.status).toBe(401);
+  }
+  const res = await request(app).get('/api/admin/photos').set('x-admin-password', 'test-admin-secret');
+  expect(res.status).toBe(429);
+});
+
+test('successful admin requests do not count toward the limit', async () => {
+  const app = make({ adminFailLimit: 2 });
+  for (let i = 0; i < 5; i++) {
+    const r = await request(app).get('/api/admin/photos').set('x-admin-password', 'test-admin-secret');
+    expect(r.status).toBe(200);
+  }
+});
+
+test('event hub refuses clients beyond its cap', () => {
+  const hub = new EventHub(1);
+  const handler = hub.handler();
+  const fakeRes = () => ({
+    set() {}, flushHeaders() {}, write() {},
+    status: jest.fn().mockReturnThis(), end: jest.fn(),
+  });
+  handler({ on: jest.fn() }, fakeRes());          // first client is accepted
+  const second = fakeRes();
+  handler({ on: jest.fn() }, second);             // second is refused
+  expect(second.status).toHaveBeenCalledWith(503);
+});
